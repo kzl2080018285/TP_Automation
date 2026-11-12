@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 运行产物：回放报告 / 设备档案 / 投屏录像
+reports/
+
+# 录制中断留下的草稿（正常结束会自动删除）
+cases/*.draft.yaml
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

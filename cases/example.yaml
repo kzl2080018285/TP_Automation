@@ -1,0 +1,121 @@
+# 可编辑测试用例示例 —— 直接用记事本/VSCode 改，改完就能回放
+# 规则：
+#   1) at / from / to 都是 0~1 归一化坐标，换分辨率自动换算
+#   2) ${xxx} 取 params 里的值，回放时可用 --param xxx=值 覆盖
+#   3) include 复用别的用例，repeat 循环，assert_* 校验，shell 执行自定义命令
+#   4) at_ms 是相对录制起点的毫秒；--timeline 按它确定性回放（可人工调时序）
+#   5) until 让动作「等条件成立」而非死等；on_fail 是步骤级失败策略
+#   6) desc 只给人看；录制生成的用例可直接按这个格式补断言
+version: 1
+format: adbcase.case
+name: 车机_空调面板_冒烟
+tags: [hvac, smoke, demo]
+device:
+  model: DemoHeadUnit
+  serial: ""
+  size: [1920, 720]
+  rotation: 0
+  touch_abs: [1919, 719]
+  abs_source: getevent
+  inputs: []
+params:
+  boot_wait: "1500"
+  target_temp: "24"
+steps:
+  - action: launch
+    package: com.demo.hvac
+    at_ms: 0
+    until: {text: "空调", timeout_ms: 5000, interval_ms: 250, retry: 1}
+    desc: 启动空调应用并等界面出现（条件等待，不靠固定延时）
+
+  - action: wait
+    ms: "${boot_wait}"
+    at_ms: 1500
+    desc: 等待界面稳定
+
+  - action: tap
+    at: [0.2350, 0.4200]
+    at_ms: 2100
+    on_fail: retry
+    desc: 点击空调面板入口（偶发失败自动重试）
+
+  - action: wait_until
+    at_ms: 2700
+    until: {text: "温度", timeout_ms: 3000, interval_ms: 200}
+    desc: 等面板加载出温度文字
+
+  - action: swipe
+    from: [0.5000, 0.7200]
+    to: [0.5000, 0.3000]
+    duration_ms: 320
+    at_ms: 3000
+    desc: 上滑温度列表
+
+  - action: repeat
+    count: 2
+    at_ms: 3400
+    desc: 连点两次加号
+    steps:
+      - action: tap
+        at: [0.8120, 0.3500]
+        at_ms: 3400
+        desc: 温度 +1
+      - action: wait
+        ms: 200
+        at_ms: 3600
+        desc: 间隔
+
+  - action: assert_text
+    text: "${target_temp}"
+    at_ms: 4000
+    desc: 校验目标温度出现
+
+  - action: assert_activity
+    contains: com.demo.hvac
+    at_ms: 4100
+    desc: 校验仍停留在空调应用
+
+  - action: screenshot
+    path: hvac_result.png
+    at_ms: 4200
+    desc: 留存结果截图
+
+  # 录制时加 --screenshots 会自动生成这类基线断言（图片放在 <用例名>_shots/ 下）；
+  # 每一条都能单独改阈值和比对区域，UI 改版后跑 replay --update-baseline 一键刷新。
+  # - action: assert_image
+  #   image: example_shots/step_0003.png
+  #   at_ms: 4250
+  #   threshold: 0.02                        # 允许 2% 像素不同
+  #   pixel_tolerance: 24                    # 单像素灰度差阈值
+  #   wait_before_ms: 250                    # 比对前等界面动画稳定
+  #   region: [0, 0, 1, 1]                  # 只比这个区域，可改成局部
+  #   ignore_regions: [[0, 0, 1, 0.06]]     # 忽略状态栏（时间/电量会变）
+  #   desc: 校验第 3 步界面
+  #
+  # until 也支持图像条件：{image: shots/ok.png, timeout_ms: 8000, region: [0,0,1,0.5]}
+  # on_fail 可选：retry（重试并中止）、skip / continue（跳过继续）、abort / stop（立即中止）
+
+  # 控件断言（assert_widget）：不认坐标认控件，换分辨率/换主题都不怕；
+  # 投屏界面右键选中控件后可直接生成这类步骤，也可手写：
+  # - action: assert_widget
+  #   selector: {id: com.demo.hvac:id/temp_value}       # id 优先，其次 desc / text / class
+  #   expect: {text: "24"}                              # 文本等于；也可 contains
+  #   desc: 校验温度显示为 24
+  # - action: assert_widget
+  #   selector: {text: 确定, index: 2}                  # 同名控件第 2 个
+  #   expect: {exists: false}                           # 没人命中才算“不存在”
+  # expect 还可写 checked: true（已勾选）/ enabled: true（可点）/ exists: true
+  # 控件的期望值核对不了颜色和图片，那种情况用上面的 assert_image（可配 region）
+
+  # - action: include
+  #   file: _common/back_to_home.yaml
+  #   with: {delay: "500"}
+  #   desc: 复用公共回主页流程
+
+  - action: keyevent
+    key: KEYCODE_BACK
+    at_ms: 4300
+    desc: 返回
+
+  - action: comment
+    desc: 这一行不执行，仅作说明

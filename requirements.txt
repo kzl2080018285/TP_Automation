@@ -1,0 +1,9 @@
+# YAML 用例需要；只用 .json 用例可不装
+PyYAML>=6.0
+# 图片基线断言（assert_image）比对需要；只录制截图、不做比对可不装
+Pillow>=9.0
+# 仅 Qt 界面 adbcase_gui.py 需要；CLI 完全不依赖，可单独不装
+# PySide6>=6.6
+# 实时投屏（mirror / GUI 投屏页）需要：H.264 解码与帧缓冲；不用投屏可不装
+# av>=12.0
+# numpy>=1.24
