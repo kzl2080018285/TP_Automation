@@ -95,7 +95,7 @@ DEFAULTS = {
     "mirror_server_jar": "",        # scrcpy-server jar 路径；留空用 vendor/ 自带的
     "mirror_auto_download": True,   # vendor/ 缺失时自动从 GitHub 下载
     "mirror_audio": True,           # 设备声音转发到电脑播放（scrcpy opus 音频通道）
-    "mirror_external_scrcpy": "",   # 官方 scrcpy.exe 路径；留空用 E:\tools\scrcpy\scrcpy.exe
+    "mirror_external_scrcpy": "",   # 官方 scrcpy.exe 路径；留空用 <部署盘>:\tools\scrcpy\scrcpy.exe（E 盘优先，无 E 盘用仓库所在盘）
     # 借鉴 GameScrcpy：USB 抖动/无线瞬断后自动重建会话，而不是直接报错停止
     "mirror_reconnect": True,       # 断线自动重连开关
     "mirror_reconnect_attempts": 3,  # 一次意外中断后最多连续重连几次（连上并出过帧才算恢复）
@@ -103,7 +103,7 @@ DEFAULTS = {
 
     # 控件透视（uiautomator dump）
     "inspect_retries": 3,          # 动画期 could not get idle state 时的重试次数
-    "inspect_u2": False,           # True=优先 uiautomator2 常驻服务（需 pip install uiautomator2）
+    "inspect_u2": False,           # True=优先 u2 全窗口树（含状态栏/dock 系统窗口；需 pip install uiautomator2，首连装辅助 APK）
 
     # 界面主题：light=浅色（默认） / dark=深色
     "theme": "light",

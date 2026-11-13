@@ -1440,6 +1440,11 @@ class MirrorView(QWidget):
         super().inputMethodEvent(ev)
 
 
+def _menu_exec(menu, pos):
+    """右键菜单弹出单一出口：自检桩掉它避免真事件循环阻塞。"""
+    return menu.exec(pos)
+
+
 class MirrorPanel(QWidget):
     """投屏页签：连接控制 + 画面 + 快捷键 + 鼠标操作录制成用例。"""
     sig_case_saved = Signal(str)
@@ -1493,6 +1498,9 @@ class MirrorPanel(QWidget):
         self._frame_timer = QTimer(self)
         self._frame_timer.setInterval(16)
         self._frame_timer.timeout.connect(self._pull_frame)
+        self._ext_timer = QTimer(self)
+        self._ext_timer.setInterval(500)
+        self._ext_timer.timeout.connect(self._watch_external)
 
     # ---------------- UI ----------------
     def _build_ui(self):
@@ -1589,6 +1597,7 @@ class MirrorPanel(QWidget):
         b = QPushButton("⚡ 高性能")
         b.setToolTip(f"启动官方 scrcpy 客户端（C/SDL GPU 渲染，帧率/清晰度上限最高），\n"
                      f"使用上方同样的分辨率/码率/帧率参数，独立窗口显示。\n"
+                     f"关闭高性能窗口后自动恢复内嵌投屏。\n"
                      f"首次使用会提示下载便携版部署到 {EXTERNAL_TOOLS_DIR}\\scrcpy")
         b.clicked.connect(self._launch_external)
         keys.addWidget(b)
@@ -1609,7 +1618,8 @@ class MirrorPanel(QWidget):
             "鼠标悬浮：高亮控件并展示类名/id/文本/bounds 等信息\n"
             "右键：选中控件（不算点击操作），侧栏定位到它并锁定高亮；\n"
             "右键菜单可把该控件设成断言（存在/不存在/文本）或存成截图基线\n"
-            "数据来自 uiautomator dump，画面变化后点「刷新控件」或勾选「自动刷新」")
+            "数据来自 uiautomator dump（仅活动应用窗口）；勾选「全窗口(u2)」可含状态栏/dock\n"
+            "画面变化后点「刷新控件」或勾选「自动刷新」")
         self.chk_inspect.toggled.connect(self._on_inspect_toggled)
         insp.addWidget(self.chk_inspect)
         self.chk_inspect_tree = QCheckBox("控件树")
@@ -1627,6 +1637,14 @@ class MirrorPanel(QWidget):
             "每 2.5s 自动重抓控件树：动画/视频界面也能跟上界面变化（未连接时自动跳过）")
         self.chk_inspect_auto.toggled.connect(self._on_auto_toggled)
         insp.addWidget(self.chk_inspect_auto)
+        self.chk_inspect_u2 = QCheckBox("全窗口(u2)")
+        self.chk_inspect_u2.setChecked(bool(self.cfg.get("inspect_u2", False)))
+        self.chk_inspect_u2.setToolTip(
+            "用 uiautomator2 常驻服务抓全窗口控件树：含状态栏/dock 栏等系统窗口\n"
+            "（原生 uiautomator dump 只有活动应用窗口，看不到这两条栏）\n"
+            "需 pip install uiautomator2，首次连接会在设备装辅助 APK；不可用时自动回退原生 dump")
+        self.chk_inspect_u2.toggled.connect(self._on_u2_toggled)
+        insp.addWidget(self.chk_inspect_u2)
         self.btn_inspect_refresh = QPushButton("刷新控件")
         self.btn_inspect_refresh.setEnabled(False)
         self.btn_inspect_refresh.setToolTip("重新抓取设备当前界面的控件树（失败会自动重试）")
@@ -1704,7 +1722,7 @@ class MirrorPanel(QWidget):
         self.insp_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.insp_tree.customContextMenuRequested.connect(self._on_tree_menu)
         self.insp_tree.setToolTip(
-            "容器层灰字、可交互控件加粗；右键菜单可展开全部/折叠到 3 层/复制定位")
+            "容器层灰字、可交互控件加粗；右键菜单可展开全部/折叠到 3 层/复制定位/复制单元格值")
         ip.addWidget(self.insp_tree, 2)
         # 属性表：完整属性逐行展示（比一整块纯文本好扫读，双击可复制值）
         self.insp_props = QTreeWidget()
@@ -1718,8 +1736,10 @@ class MirrorPanel(QWidget):
         self.insp_props.setColumnWidth(0, 86)
         self.insp_props.header().setStretchLastSection(True)
         self.insp_props.setMinimumHeight(150)
-        self.insp_props.setToolTip("选中/悬浮控件后显示完整属性；双击任意行复制值")
+        self.insp_props.setToolTip("选中/悬浮控件后显示完整属性；双击或右键复制值")
         self.insp_props.itemDoubleClicked.connect(self._on_prop_double)
+        self.insp_props.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.insp_props.customContextMenuRequested.connect(self._on_prop_menu)
         ip.addWidget(self.insp_props, 1)
         self.btn_insp_copy = QPushButton("复制定位表达式")
         self.btn_insp_copy.setToolTip("把当前条目的选择器（id > text > desc > class）复制到剪贴板")
@@ -1851,6 +1871,7 @@ class MirrorPanel(QWidget):
 
     def _stop_external(self):
         """关掉高性能窗口：外部 scrcpy 与内嵌投屏不能共存。"""
+        self._ext_timer.stop()
         p = self._ext_proc
         self._ext_proc = None
         if p is None or p.poll() is not None:
@@ -1864,6 +1885,25 @@ class MirrorPanel(QWidget):
             except Exception:
                 pass
 
+    def _watch_external(self):
+        """轮询高性能进程退出：窗口关闭后自动恢复内嵌投屏。
+
+        两种投屏互斥，切高性能时停了内嵌；外部窗口退出后必须有人
+        接管，否则画面就黑着没人管。主动切换/关 App 走 _stop_external
+        会先停掉本定时器，不会误触发。
+        """
+        p = self._ext_proc
+        if p is None:
+            self._ext_timer.stop()
+            return
+        if p.poll() is None:
+            return
+        self._ext_proc = None
+        self._ext_timer.stop()
+        self._on_log("[投屏] 高性能窗口已关闭，自动恢复内嵌投屏")
+        if self.worker is None or not self.worker.isRunning():
+            self.start_mirror()
+
     def _launch_external(self):
         if self._external_running():
             QMessageBox.information(self, "高性能模式",
@@ -1874,7 +1914,7 @@ class MirrorPanel(QWidget):
             ret = QMessageBox.question(
                 self, "高性能模式",
                 f"未找到官方 scrcpy（默认部署位置 {EXTERNAL_TOOLS_DIR}\\scrcpy）。\n\n"
-                "是否下载官方 win64 便携版（约 9MB）并解压到 E 盘？\n"
+                f"是否下载官方 win64 便携版（约 9MB）并解压到 {EXTERNAL_TOOLS_DIR}\\scrcpy？\n"
                 f"下载地址：{EXTERNAL_ZIP_URL}",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if ret != QMessageBox.StandardButton.Yes:
@@ -1910,8 +1950,9 @@ class MirrorPanel(QWidget):
             QMessageBox.critical(self, "启动失败", str(exc))
             return
         self._ext_proc = proc
+        self._ext_timer.start()
         self._on_log(f"[投屏] 已启动官方 scrcpy 高性能窗口（pid={proc.pid}），参数与面板一致；"
-                     f"高性能投屏与内嵌投屏不能共存，已停止内嵌投屏（如需切回请先关闭该窗口）")
+                     f"高性能投屏与内嵌投屏不能共存，已停止内嵌投屏；关闭该窗口后自动恢复")
 
     # ---------------- 投屏生命周期 ----------------
     def start_mirror(self):
@@ -2136,6 +2177,12 @@ class MirrorPanel(QWidget):
             self._inspect_timer.start()
         else:
             self._inspect_timer.stop()
+
+    def _on_u2_toggled(self, checked: bool):
+        self.cfg["inspect_u2"] = bool(checked)
+        _persist_cfg_key("inspect_u2", bool(checked))
+        if self.chk_inspect.isChecked():
+            self._refresh_inspect()
 
     def _refresh_inspect(self):
         if self._inspect_busy or not self.chk_inspect.isChecked():
@@ -2536,6 +2583,22 @@ class MirrorPanel(QWidget):
         QApplication.clipboard().setText(val)
         self.lbl_inspect.setText("已复制：" + short(val, 32))
 
+    def _on_prop_menu(self, pos):
+        """属性表右键菜单：复制值 / 复制属性名（双击同样复制值）。"""
+        item = self.insp_props.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu(self)
+        act_val = menu.addAction("复制值")
+        act_name = menu.addAction("复制属性名")
+        act_val.setEnabled(bool(item.text(1)))
+        chosen = _menu_exec(menu, self.insp_props.viewport().mapToGlobal(pos))
+        if chosen is act_val:
+            self._on_prop_double(item, 1)
+        elif chosen is act_name:
+            QApplication.clipboard().setText(item.text(0))
+            self.lbl_inspect.setText("已复制：" + short(item.text(0), 32))
+
     def _on_tree_menu(self, pos):
         """控件树右键菜单：深嵌套时快速收敛/展开视图，或直接复制关键字段。"""
         item = self.insp_tree.itemAt(pos)
@@ -2547,10 +2610,12 @@ class MirrorPanel(QWidget):
         act_branch = menu.addAction("展开选中分支")
         act_sel = menu.addAction("复制定位表达式")
         act_path = menu.addAction("复制控件路径")
+        act_cell = menu.addAction("复制单元格值")
         act_branch.setEnabled(item is not None)
         act_sel.setEnabled(bool(node and node.get("sel")))
         act_path.setEnabled(bool(node and node.get("path")))
-        chosen = menu.exec(self.insp_tree.viewport().mapToGlobal(pos))
+        act_cell.setEnabled(item is not None)
+        chosen = _menu_exec(menu, self.insp_tree.viewport().mapToGlobal(pos))
         if chosen is act_all:
             self.insp_tree.expandAll()
         elif chosen is act_three:
@@ -2563,6 +2628,11 @@ class MirrorPanel(QWidget):
         elif chosen is act_path and node is not None:
             QApplication.clipboard().setText(node.get("path") or "")
             self.lbl_inspect.setText("已复制路径：" + short(node.get("path") or "", 28))
+        elif chosen is act_cell and item is not None:
+            val = item.text(max(0, self.insp_tree.columnAt(pos.x())))
+            if val:
+                QApplication.clipboard().setText(val)
+                self.lbl_inspect.setText("已复制：" + short(val, 32))
 
     def _on_tree_double(self, item, _col=0):
         """双击/复制按钮：选择器进剪贴板，直接可粘到录制用例里。"""
@@ -4392,6 +4462,12 @@ def run_gui_selftest() -> int:
         checks.append((bool(cond), label, detail))
 
     w = MainWindow(autoload_devices=False)
+    # 自检断言按原生 dump（应用窗口）树形校准：不受用户配置 inspect_u2 影响，
+    # u2 全窗口树含系统窗口会打破这些断言；blockSignals 避免回写用户配置
+    w.cfg["inspect_u2"] = False
+    w.mirror_panel.chk_inspect_u2.blockSignals(True)
+    w.mirror_panel.chk_inspect_u2.setChecked(False)
+    w.mirror_panel.chk_inspect_u2.blockSignals(False)
     ck(APP_TITLE.split(" —")[0] in w.windowTitle(), "主窗口构建")
     ck(w.tabs.count() == 6, "六个功能页签", str(w.tabs.count()))
     ck(w.tabs.tabText(0).find("投屏") >= 0, "投屏页签在首位", w.tabs.tabText(0))
@@ -4484,6 +4560,23 @@ def run_gui_selftest() -> int:
     ck(_asel == {"id": "com.demo:id/mode"}, "投屏命中控件生成断言选择器", str(_asel))
 
     ck(w.mirror_panel.snapshot() is None, "未投屏时 snapshot 返回 None")
+
+    # 高性能退出监听：窗口关闭后自动恢复内嵌投屏（桩掉 start_mirror，不真连设备）
+    import subprocess as _sp
+    _mp = w.mirror_panel
+    _resume: list = []
+    _orig_start = _mp.start_mirror
+    _mp.start_mirror = lambda: _resume.append(1)
+    _mp._ext_proc = _sp.Popen([sys.executable, "-c", "pass"])
+    _mp._ext_proc.wait()
+    _mp._watch_external()
+    ck(_resume == [1] and _mp._ext_proc is None,
+       "高性能窗口关闭后自动恢复内嵌投屏")
+    _mp._watch_external()
+    ck(_resume == [1], "退出监听只触发一次恢复")
+    _mp.start_mirror = _orig_start
+    ck(w.mirror_panel.chk_inspect_u2.isChecked() == bool(w.cfg.get("inspect_u2", False)),
+       "全窗口(u2)开关与配置一致")
     try:
         w._capture_assert_shot()
         _shot_raised = False
@@ -5193,6 +5286,27 @@ def run_gui_selftest() -> int:
     panel._on_prop_double(_sel_row)
     ck(QApplication.clipboard().text() == '//*[@resource-id="com.demo:id/ok"]',
        "属性表双击行复制定位表达式", QApplication.clipboard().text())
+    # 属性表右键菜单：复制值 / 复制属性名（桩掉 QMenu.exec 依次选第一/二项）
+    _p0 = panel.insp_props.topLevelItem(0)
+    panel.insp_props.scrollToItem(_p0, QAbstractItemView.ScrollHint.PositionAtTop)
+    _orig_menu_exec = globals()["_menu_exec"]
+    globals()["_menu_exec"] = lambda menu, pos: menu.actions()[0]
+    panel._on_prop_menu(QPoint(5, 5))
+    ck(QApplication.clipboard().text() == _p0.text(1),
+       "属性表右键复制值", QApplication.clipboard().text())
+    globals()["_menu_exec"] = lambda menu, pos: menu.actions()[1]
+    panel._on_prop_menu(QPoint(5, 5))
+    ck(QApplication.clipboard().text() == _p0.text(0),
+       "属性表右键复制属性名", QApplication.clipboard().text())
+    # 控件树右键：复制单元格值（第一行第 0 列）
+    _t0 = panel.insp_tree.topLevelItem(0)
+    panel.insp_tree.scrollToItem(_t0, QAbstractItemView.ScrollHint.PositionAtTop)
+    globals()["_menu_exec"] = lambda menu, pos: next(
+        a for a in menu.actions() if a.text() == "复制单元格值")
+    panel._on_tree_menu(QPoint(5, 5))
+    ck(QApplication.clipboard().text() == _t0.text(0),
+       "控件树右键复制单元格值", QApplication.clipboard().text())
+    globals()["_menu_exec"] = _orig_menu_exec
     panel._on_view_inspect_pick(None)
     view.on_shortcut, view.on_input_event = _orig_shortcut, _orig_feed
 

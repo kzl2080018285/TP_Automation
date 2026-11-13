@@ -401,12 +401,35 @@ def _parse_or_raise(xml_text: str) -> list[dict]:
 def _u2_dump(adb) -> str:
     """可选数据源：uiautomator2 常驻服务（单次 200~500ms，不等 idle）。
 
-    未安装 uiautomator2 时抛 ImportError，由 fetch_nodes 回退 adb dump。
+    u2 服务端遍历全部 accessibility 窗口根（getWindowRoots），状态栏/dock
+    等系统窗口也在树里；原生 uiautomator dump 只有活动应用窗口。
+    未安装 uiautomator2 时抛 ImportError，由调用方回退 adb dump。
     """
     import uiautomator2 as u2
     serial = getattr(adb, "serial", "") or ""
-    dev = u2.connect(serial) if serial else u2.connect()
-    return dev.dump_hierarchy()
+    dev = _U2_DEVICES.get(serial)
+    if dev is None:
+        dev = u2.connect(serial) if serial else u2.connect()
+        _U2_DEVICES[serial] = dev
+    try:
+        return dev.dump_hierarchy()
+    except Exception:
+        _U2_DEVICES.pop(serial, None)   # 掉线/服务死掉不缓存坏连接
+        raise
+
+
+_U2_DEVICES: dict = {}
+
+
+def dump_xml(adb, *, use_u2: bool = False) -> str:
+    """原始控件树 XML：use_u2 时优先 u2 全窗口（含状态栏/dock），
+    未开启/不可用回退原生 adb dump（仅活动窗口）。回放断言与透视共用。"""
+    if use_u2:
+        try:
+            return _u2_dump(adb)
+        except Exception:   # noqa: BLE001  未安装/连接失败都回退 adb
+            pass
+    return adb.uiautomator_dump()
 
 
 def _is_transient(exc: BaseException) -> bool:

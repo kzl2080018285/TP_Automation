@@ -12,7 +12,7 @@ from pathlib import Path
 from .adb import Adb, AdbError
 from .cases import expand_steps, render_params
 from .image_baseline import compare_images
-from .inspector import check_widget, parse_hierarchy, selector_label
+from .inspector import check_widget, dump_xml, parse_hierarchy, selector_label
 from .probe import probe
 
 try:
@@ -77,6 +77,7 @@ class Runner:
         self.case_dir = Path(case_dir) if case_dir else Path.cwd()
         self.follow_path = bool(cfg.get("follow_path", False))
         self.scale = cfg.get("scale", "stretch")
+        self.use_u2 = bool(cfg.get("inspect_u2", False))
         self.update_baseline = update_baseline
         # 借鉴 GameScrcpy Replay.cpp: 相对时间轴 + 稳定排序的确定性回放
         self.timeline = timeline
@@ -235,7 +236,7 @@ class Runner:
             text = str(step["text"])
             cmds.append(f"uiautomator dump | {act} '{text}'")
             if not self.dry_run:
-                dump = adb.uiautomator_dump()
+                dump = dump_xml(adb, use_u2=self.use_u2)
                 hit = text in dump
                 if act == "assert_text" and not hit:
                     raise AssertionError(f"界面未找到文本: {text}")
@@ -247,7 +248,7 @@ class Runner:
             want = ", ".join(f"{k}={v}" for k, v in exp.items())
             cmds.append(f"uiautomator dump | assert_widget {selector_label(sel)} [{want}]")
             if not self.dry_run:
-                nodes = parse_hierarchy(adb.uiautomator_dump())
+                nodes = parse_hierarchy(dump_xml(adb, use_u2=self.use_u2))
                 ok, msg = check_widget(nodes, sel, exp)
                 if not ok:
                     raise AssertionError(msg)
@@ -306,7 +307,7 @@ class Runner:
         """借鉴 GameScrcpy Action.until() / vision.waitFor：状态来自查询而非固定延时。"""
         needs_dump = "text" in cond or "not_text" in cond
         try:
-            dump = self.adb.uiautomator_dump() if needs_dump else ""
+            dump = dump_xml(self.adb, use_u2=self.use_u2) if needs_dump else ""
         except AdbError:
             # 动画期 dump 常报 could not get idle state：视为本轮未命中
             # 继续轮询到超时，而不是把整个等待判死

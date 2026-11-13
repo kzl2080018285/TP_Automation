@@ -939,6 +939,8 @@ def run_selftest() -> tuple[bool, list[tuple[bool, str, str]]]:
             _insp._u2_dump = _no_u2
             _check(len(_insp.fetch_nodes(_U2Adb(), use_u2=True)) == 2,
                    "透视可选 u2 数据源不可用时回退 adb dump", results)
+            _check(len(_insp.parse_hierarchy(_insp.dump_xml(_U2Adb(), use_u2=True))) == 2,
+                   "dump_xml u2 不可用时回退 adb dump", results)
         finally:
             _insp._u2_dump = _u2_backup
 

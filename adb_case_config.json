@@ -47,5 +47,5 @@
   "theme": "light",
   "mirror_audio": true,
   "inspect_retries": 3,
-  "inspect_u2": false
+  "inspect_u2": true
 }

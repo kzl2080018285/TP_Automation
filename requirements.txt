@@ -7,3 +7,5 @@ Pillow>=9.0
 # 实时投屏（mirror / GUI 投屏页）需要：H.264 解码与帧缓冲；不用投屏可不装
 # av>=12.0
 # numpy>=1.24
+# 全窗口控件树（inspect_u2：状态栏/dock 可见）需要；不装自动回退原生 dump
+# uiautomator2>=3.0

@@ -191,9 +191,17 @@ def _free_port() -> int:
 # --------------------------------------------------------------------------
 # 外挂官方 scrcpy（C/SDL 客户端，GPU 渲染 + 硬解码，帧率/清晰度上限最高）
 # 用途：Python 端解码跟不上高码率高分辨率时，一键切官方客户端看同等参数效果。
-# 部署约定：便携版解压到 E:\tools\scrcpy（可用 cfg mirror_external_scrcpy 指定）。
+# 部署约定：便携版解压到 <部署盘>:\tools\scrcpy（可用 cfg mirror_external_scrcpy 指定）。
 # --------------------------------------------------------------------------
-EXTERNAL_TOOLS_DIR = r"E:\tools"
+def _default_tools_dir() -> str:
+    """优先 E:\\tools（原约定）；无 E 盘时回退仓库所在盘的 \\tools，
+    避免在不存在的盘符上 mkdir 报 WinError 3。"""
+    if Path("E:\\").exists():
+        return r"E:\tools"
+    return str(Path(Path(__file__).resolve().anchor) / "tools")
+
+
+EXTERNAL_TOOLS_DIR = _default_tools_dir()
 EXTERNAL_ZIP_URL = (
     f"https://github.com/Genymobile/scrcpy/releases/download/"
     f"v{SERVER_VERSION}/scrcpy-win64-v{SERVER_VERSION}.zip"
@@ -290,6 +298,21 @@ def _read_exact(sock: socket.socket, n: int) -> bytes:
             raise ConnectionError("投屏连接被设备端关闭")
         buf.extend(chunk)
     return bytes(buf)
+
+
+def _rgb24(frame):
+    """解码帧 -> rgb24 ndarray。
+
+    部分车机编码器把 VUI 色域误标为 YCgCo（colorspace=8），数据实为标准
+    YCbCr；PyAV 19 自带的新 swscale 不支持 YCgCo 源，转换直接报 -129。
+    失败时覆盖源色域为 smpte170m 重试（实测画面颜色正确）；
+    手机等正常设备首路径即成功，行为与原来完全一致。
+    """
+    try:
+        return frame.to_ndarray(format="rgb24")
+    except Exception:
+        return frame.reformat(format="rgb24", src_colorspace="smpte170m",
+                              dst_colorspace="smpte170m").to_ndarray()
 
 
 class _SockReader:
@@ -676,7 +699,7 @@ class ScrcpyMirror:
                             except AdbError:
                                 pass
                             self.log(f"[投屏] 视频尺寸变为 {frame.width}x{frame.height}")
-                        arr = frame.to_ndarray(format="rgb24")
+                        arr = _rgb24(frame)
                         # FFmpeg 行stride有对齐填充时 to_ndarray 返回非连续视图，
                         # 单槽只存 C 连续版本，消费方（QImage/断言）可直接引用
                         if not arr.flags["C_CONTIGUOUS"]:
